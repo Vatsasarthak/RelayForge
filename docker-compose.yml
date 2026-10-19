@@ -1,11 +1,14 @@
 # Local development stack. Copy .env.example to .env first; every variable used here is documented there.
 # Infrastructure ports are bound to 127.0.0.1 only, so they are not reachable from other machines.
-name: notifyr
+# Volume and network names are prefixed with the project name. Installations created before the rename to
+# RelayForge used the project "notifyr": set COMPOSE_PROJECT_NAME=notifyr in .env to keep using their volumes
+# (see README "Upgrading from Notifyr").
+name: relayforge
 
 services:
   postgres:
     image: postgres:16
-    container_name: notifyr_postgres
+    container_name: relayforge_postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
@@ -23,9 +26,10 @@ services:
 
   rabbitmq:
     image: rabbitmq:3.13-management
-    container_name: notifyr_rabbitmq
+    container_name: relayforge_rabbitmq
     # RabbitMQ keeps its data per node name, which is derived from the hostname: keep it stable
-    hostname: notifyr-rabbitmq
+    # (installations from before the rename set RABBITMQ_HOSTNAME=notifyr-rabbitmq to keep their broker data)
+    hostname: ${RABBITMQ_HOSTNAME:-relayforge-rabbitmq}
     restart: unless-stopped
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:?Set RABBITMQ_DEFAULT_USER in .env}
@@ -46,7 +50,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: notifyr_redis
+    container_name: relayforge_redis
     restart: unless-stopped
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
@@ -58,8 +62,8 @@ services:
 
   app:
     build: .
-    image: notifyr-app:local
-    container_name: notifyr_app
+    image: relayforge-app:local
+    container_name: relayforge_app
     restart: unless-stopped
     # matches spring.lifecycle.timeout-per-shutdown-phase so in-flight work can finish before SIGKILL
     stop_grace_period: 45s
@@ -109,6 +113,7 @@ services:
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
       WORKER_MAX_CONCURRENCY: ${WORKER_MAX_CONCURRENCY:-8}
       DB_POOL_SIZE: ${DB_POOL_SIZE:-20}
+      MAX_REQUEST_BODY_SIZE: ${MAX_REQUEST_BODY_SIZE:-1MB}
       BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
     healthcheck:
@@ -120,7 +125,7 @@ services:
 
   prometheus:
     image: prom/prometheus:v2.55.1
-    container_name: notifyr_prometheus
+    container_name: relayforge_prometheus
     restart: unless-stopped
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
@@ -129,7 +134,7 @@ services:
 
   grafana:
     image: grafana/grafana:11.3.0
-    container_name: notifyr_grafana
+    container_name: relayforge_grafana
     restart: unless-stopped
     depends_on:
       - prometheus

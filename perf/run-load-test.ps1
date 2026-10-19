@@ -29,6 +29,8 @@ $apiKey = Get-EnvValue "API_KEY"
 $dbUser = Get-EnvValue "POSTGRES_USER"
 $dbName = Get-EnvValue "POSTGRES_DB"
 $appUrl = "http://localhost:" + (Get-EnvValue "APP_PORT" "8080")
+# compose network name = "<project>_default" (COMPOSE_PROJECT_NAME=notifyr for pre-rename installations)
+$network = (Get-EnvValue "COMPOSE_PROJECT_NAME" "relayforge") + "_default"
 
 $resultsDir = Join-Path $PSScriptRoot "results"
 New-Item -ItemType Directory -Force $resultsDir | Out-Null
@@ -59,7 +61,7 @@ $env:LOADTEST_USER = $loadTestUser
 # k6 writes its log lines to stderr; do not let PowerShell turn them into terminating errors
 $ErrorActionPreference = "Continue"
 try {
-    docker run --rm --network notifyr_default `
+    docker run --rm --network $network `
         -v "${PSScriptRoot}\k6:/scripts:ro" -v "${resultsDir}:/results" `
         -e API_KEY -e AUTH_TOKEN -e LOADTEST_USER -e RATE=$Rate -e DURATION=$Duration -e MAX_VUS=$MaxVus `
         grafana/k6:0.54.0 run --quiet --summary-trend-stats "avg,min,med,p(90),p(95),p(99),max" `
@@ -95,7 +97,7 @@ FROM (SELECT owner, extract(epoch FROM (sent_at - created_at)) * 1000 AS ms
         AND sent_at IS NOT NULL) t
 GROUP BY owner;
 "@
-$latency = ($sql | docker exec -i notifyr_postgres psql -U $dbUser -d $dbName -tA) -join ""
+$latency = ($sql | docker exec -i relayforge_postgres psql -U $dbUser -d $dbName -tA) -join ""
 $latency | Set-Content -Encoding utf8 (Join-Path $resultsDir "delivery-rate$Rate-$stamp.json")
 "DELIVERY_LATENCY $latency"
 exit $k6Exit

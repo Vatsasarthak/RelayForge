@@ -1,7 +1,7 @@
-# Notifyr — Notification Delivery Platform
+# RelayForge — Notification Delivery Platform
 
-[![CI](https://github.com/Vatsasarthak/Notifyr/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Vatsasarthak/Notifyr/actions/workflows/ci.yml)
-
+> Formerly **Notifyr**. See [Upgrading from Notifyr](#upgrading-from-notifyr) if you run an installation created
+> under the old name.
 
 > Spring Boot service that accepts Email / SMS / (simulated) Push notifications and bulk campaigns over a REST API
 > and delivers them asynchronously through RabbitMQ — with a transactional outbox, idempotent requests, bounded
@@ -19,6 +19,7 @@
 - [Retry strategy and failure handling](#retry-strategy-and-failure-handling)
 - [Database design](#database-design)
 - [Quick start (Docker Compose)](#quick-start-docker-compose)
+- [Upgrading from Notifyr](#upgrading-from-notifyr)
 - [Local development (VS Code on Windows)](#local-development-vs-code-on-windows)
 - [Configuration](#configuration)
 - [Authentication and authorization](#authentication-and-authorization)
@@ -45,7 +46,7 @@
 - **Security** — API key + JWT (BCrypt passwords); notifications are private to their creator; ADMIN-only
   management endpoints; the app refuses to start without strong secrets; actuator on a separate port.
 - **API quality** — validation with field-level errors, one error format with correlation id, pagination
-  (`page`, `size` ≤ 100, `sort`), `Location` headers.
+  (`page`, `size` ≤ 100, `sort`), `Location` headers, request bodies limited to 1 MB (`413`).
 - **Observability** — correlation ids from HTTP through RabbitMQ into worker logs, optional JSON (ECS) logs,
   latency histograms (API, provider call, end-to-end delivery), outbox and queue-depth metrics, health checks,
   a provisioned Grafana dashboard.
@@ -158,7 +159,7 @@ before the result was committed, the recovery job sends it again. Delivery to th
 | Worker crash during delivery | Message is redelivered (unacked) but the row is `PROCESSING`; after the lease (5 min) the recovery job re-queues it |
 | Unexpected listener error (e.g. DB down) | 3 in-process attempts (1 s, 2 s), then the message is republished to the DLQ; the recovery job later re-queues the notification |
 | Unreadable (poison) message | Same as above → DLQ → recorded in `dead_letters` |
-| Redis down | Logged; idempotency falls back to PostgreSQL, requests still succeed |
+| Redis down or hung | Logged; each cache call gives up after 1 s (`spring.data.redis.timeout`), idempotency falls back to PostgreSQL, requests still succeed. The `redis` health component reports DOWN meanwhile |
 | Hung broker (network partition) | 10 s heartbeat and RPC timeouts fail the publish instead of blocking for the client default of 10 min |
 
 Dead letters are consumed into the `dead_letters` table (`GET /admin/dead-letters`) and can be replayed
@@ -249,7 +250,7 @@ Prerequisites: **Docker Desktop**. Run from the folder that contains `pom.xml`.
 Copy-Item .env.example .env
 notepad .env                    # replace every "change-me" value; change ports that are already in use
 docker compose up -d --build
-docker compose ps               # wait for notifyr_app "(healthy)"
+docker compose ps               # wait for relayforge_app "(healthy)"
 ```
 
 | Service | URL | Login |
@@ -259,7 +260,7 @@ docker compose ps               # wait for notifyr_app "(healthy)"
 | Health / metrics | http://localhost:9091/actuator/health, /actuator/prometheus | none (localhost only) |
 | RabbitMQ management | http://localhost:15672 | `RABBITMQ_DEFAULT_USER` / `RABBITMQ_DEFAULT_PASS` |
 | Prometheus | http://localhost:9090 | none |
-| Grafana (dashboard "Notifyr overview") | http://localhost:3000 | `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD` |
+| Grafana (dashboard "RelayForge overview") | http://localhost:3000 | `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD` |
 
 Use your `.env` ports if you changed the defaults.
 
@@ -273,20 +274,53 @@ docker compose down             # remove containers, keep the database volume
 
 ---
 
+## Upgrading from Notifyr
+
+The rename changed the Docker Compose project from `notifyr` to `relayforge`. Compose prefixes volume and network
+names with the project name, so without action a renamed stack starts with **new, empty** volumes
+(`relayforge_postgres_data`, …). The old volumes are not deleted; they are just no longer used.
+
+To keep an existing installation's data:
+
+1. Keep your existing `.env` (its `POSTGRES_*` / `RABBITMQ_*` values are the ones the database and broker were
+   initialised with) and add:
+   ```
+   COMPOSE_PROJECT_NAME=notifyr
+   RABBITMQ_HOSTNAME=notifyr-rabbitmq
+   ```
+   `COMPOSE_PROJECT_NAME` selects the old volumes (`notifyr_postgres_data`, `notifyr_rabbitmq_data`) and network;
+   `RABBITMQ_HOSTNAME` keeps the broker's node name, under which RabbitMQ stores its queues and messages.
+2. Remove the old containers **without** `-v`: `docker compose down`. Container names changed (`notifyr_*` →
+   `relayforge_*`), so the old containers would otherwise keep holding the ports.
+3. `docker compose up -d --build`
+
+Unchanged by the rename, so existing data and clients keep working: database schema and Flyway history, queue and
+exchange names, API routes, environment variable names, the Java package `com.vatsasarthak.notifyr`, and the AMQP
+header `x-notifyr-failure-reason` (stored in pending outbox rows and dead-lettered messages).
+`NOTIFYR_ENV_FILE` is still honoured; the new name is `RELAYFORGE_ENV_FILE`.
+
+Changed: container names (`relayforge_*`), image (`relayforge-app:local`), Prometheus job (`relayforge`), Grafana
+dashboard (uid `relayforge-overview`), the container user, the jar name (`relayforge-0.0.1-SNAPSHOT.jar`), the
+`[RelayForge]` application name in log lines, and the example database/user names in `.env.example`. Prometheus and
+Grafana keep no volume in this Compose file, so their history starts fresh either way.
+
+---
+
 ## Local development (VS Code on Windows)
 
 Prerequisites: JDK 21, Docker Desktop, VS Code with *Extension Pack for Java* and *Spring Boot Extension Pack*.
 Maven is not needed (`mvnw.cmd` is included).
 
 ```powershell
-cd <path>\Notifyr                         # the folder with pom.xml - open THIS folder in VS Code
+cd <path-to-checkout>                     # the folder with pom.xml - open THIS folder in VS Code
 Copy-Item .env.example .env               # first time only, then edit it
 docker compose up -d postgres rabbitmq redis
-.\mvnw.cmd spring-boot:run                # or: Run on NotifyrApplication.java in VS Code
+.\mvnw.cmd spring-boot:run                # or: Run on RelayForgeApplication.java in VS Code
 ```
 
-The app reads `.env` from the working directory (`spring.config.import`), so the same file serves Docker and local
-runs; real environment variables win. If the `notifyr_app` container is running too, stop it first
+The app reads `.env` from the working directory (`spring.config.import`; `RELAYFORGE_ENV_FILE` points it at another
+file), so the same file serves Docker and local runs; real environment variables win. If the `relayforge_app`
+container is running too, stop it first
 (`docker compose stop app`) because both use `APP_PORT` / `MANAGEMENT_PORT`.
 
 ---
@@ -305,6 +339,8 @@ Everything is set through environment variables; `.env.example` documents each o
 | `APP_PORT`, `MANAGEMENT_PORT`, `*_PORT` | 8080, 9091, … | host ports |
 | `WORKER_CONCURRENCY` / `WORKER_MAX_CONCURRENCY` | 4 / 8 | notification consumer threads |
 | `DB_POOL_SIZE` | 20 | Hikari pool size |
+| `MAX_REQUEST_BODY_SIZE` | 1MB | larger request bodies are rejected with `413` |
+| `COMPOSE_PROJECT_NAME`, `RABBITMQ_HOSTNAME` | `relayforge`, `relayforge-rabbitmq` | set to `notifyr`, `notifyr-rabbitmq` to keep a pre-rename installation's volumes ([details](#upgrading-from-notifyr)) |
 | `MOCK_PROVIDER_DELAY_MS` | 0 | artificial mock-provider latency (load tests) |
 | `RETRY_TTL_30S_MS`, `RETRY_TTL_2M_MS`, `RETRY_TTL_5M_MS` | 30000 / 120000 / 300000 | retry delays |
 | `PROCESSING_LEASE` | `PT5M` | time after which a `PROCESSING` notification is considered abandoned |
@@ -351,7 +387,9 @@ create another admin. The first ADMIN is created at startup from `BOOTSTRAP_ADMI
 | GET | `/admin/dead-letters` | ADMIN | dead-letter records |
 | POST | `/admin/dead-letters/{id}/replay` | ADMIN | re-queue the dead-lettered notification |
 
-Lists return `{"content": [...], "page", "size", "totalElements", "totalPages"}`. Errors:
+Lists return `{"content": [...], "page", "size", "totalElements", "totalPages"}`. Client errors keep their 4xx
+status (`400` validation, `401`/`403`, `404`, `405`, `409` conflicts, `413` body over `MAX_REQUEST_BODY_SIZE`,
+`415` unsupported `Content-Type`); only unexpected failures are `500`. Errors:
 
 ```json
 {"timestamp": "2026-10-11T12:00:00Z", "status": 400, "error": "Validation failed",
@@ -410,7 +448,7 @@ Phone numbers must be E.164 (`+15551234567`). `scheduledTime` (e.g. `"2030-01-01
 
 - **Health** — `:9091/actuator/health`; components `db`, `rabbit`, `redis`, `outbox` (DOWN when the oldest
   unpublished message is > 5 min old) are shown with an ADMIN token.
-- **Grafana** — dashboard *Notifyr overview* (provisioned): API rate and p50/p95/p99, delivery outcomes, end-to-end
+- **Grafana** — dashboard *RelayForge overview* (provisioned): API rate and p50/p95/p99, delivery outcomes, end-to-end
   latency, outbox backlog, queue depth, dead letters/recovery, provider latency.
 
 ---
@@ -424,15 +462,15 @@ Phone numbers must be E.164 (`+15551234567`). `scheduledTime` (e.g. `"2030-01-01
 CI: [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs the same `clean verify` (incl. Testcontainers),
 validates `docker-compose.yml` and builds the Docker image on every push to `main` and every pull request.
 
-103 tests (JUnit 5, Mockito, Testcontainers with real PostgreSQL 16, RabbitMQ 3.13 and Redis 7):
+110 tests (JUnit 5, Mockito, Testcontainers with real PostgreSQL 16, RabbitMQ 3.13 and Redis 7):
 
 | Area | Tests |
 |------|-------|
-| API end to end (`ApiIntegrationTest`) | auth, roles (401 vs 403), cross-user isolation, validation, pagination, idempotency incl. body mismatch, campaigns and stats, scheduler, actuator, correlation ids |
-| Reliability (`ReliabilityIntegrationTest`) | 10 duplicate messages → 1 provider call; stale earlier-attempt message → ignored; 20 concurrent same-key requests → 1 row; 10 concurrent campaign sends → 1 dispatch; broker paused → requests accepted, delivered after recovery; crashed-worker, lost-message and stuck-campaign recovery |
+| API end to end (`ApiIntegrationTest`) | auth, roles (401 vs 403), cross-user isolation, validation, `413`/`415`, pagination, idempotency incl. body mismatch, campaigns and stats, scheduler, actuator, correlation ids |
+| Reliability (`ReliabilityIntegrationTest`) | 10 duplicate messages → 1 provider call; stale earlier-attempt message → ignored; 20 concurrent same-key requests → 1 row; 10 concurrent campaign sends → 1 dispatch; broker paused → requests accepted, delivered after recovery; Redis paused → idempotent requests still answered within seconds and deduplicated; crashed-worker, lost-message and stuck-campaign recovery |
 | Retries / DLQ (`RetryAndDeadLetterIntegrationTest`) | real TTL retry topology → `FAILED` after 4 attempts → dead-letter record → replay; poison message → DLQ, no loop |
-| Schema (`NotifyrApplicationTests`) | Flyway migrations on an empty database validate against the JPA model |
-| Unit | state machine, worker outcomes, outbox relay and backoff, idempotency (Redis down, races), campaigns, auth and admin bootstrap, JWT, log masking, correlation filter, templates |
+| Schema (`RelayForgeApplicationTests`) | Flyway migrations on an empty database validate against the JPA model |
+| Unit | state machine, worker outcomes, outbox relay and backoff, idempotency (Redis down, races), campaigns, auth and admin bootstrap, JWT, log masking, correlation and request-size filters, templates |
 
 Integration tests are skipped (reported as skipped) when Docker is not running. They never read your `.env`.
 
@@ -444,7 +482,8 @@ A reproducible k6 load test lives in [`perf/`](perf/README.md): it drives `POST 
 arrival rate, waits until every accepted notification is delivered, and computes end-to-end delivery latency from
 PostgreSQL. Methodology, environment and all results are in **[perf/README.md](perf/README.md)**.
 
-Measured on one laptop (Ryzen 5 5600H, everything incl. k6 in Docker Desktop), 60 s per rate, mock email provider:
+Measured on 2026-10-11 (before the rename and later changes, which were not re-measured) on one laptop (Ryzen 5
+5600H, everything incl. k6 in Docker Desktop), 60 s per rate, mock email provider:
 
 | Rate | API p95 | Errors | Accepted → delivered p95 | Backlog drained after load |
 |---:|---:|---:|---:|---:|
@@ -469,6 +508,8 @@ docker compose up -d
   repository.
 - **Passwords** are BCrypt-hashed (8–72 characters). The public registration endpoint cannot create administrators
   ([ADR 0006](docs/adr/0006-admin-bootstrap.md)).
+- **Request size**: bodies over `MAX_REQUEST_BODY_SIZE` (1 MB) are rejected with `413` before authentication and
+  before they are parsed, whether or not the client sends `Content-Length`.
 - **Authorization**: API key on every business endpoint, JWT roles for writes, per-user notification ownership
   (404 for other users' notifications).
 - **Exposure**: actuator only on the management port; PostgreSQL, RabbitMQ, Redis, Prometheus and Grafana are bound
@@ -476,13 +517,15 @@ docker compose up -d
 - **Logs** mask personal data (`j***@example.com`, `+1*******567`, device tokens reduced to a prefix) and never
   contain passwords, tokens or keys. Error responses never include stack traces.
 - **SQL** is generated by JPA / parameterised `@Query` statements only; no string-built SQL.
-- **Dependencies** were checked against [OSV.dev](https://osv.dev) on 2026-10-15 (179 resolved artifacts). Patched
-  versions are pinned in `pom.xml`; the only open advisories are two Spring Framework 6.2 issues fixed only in 7.0
-  (CVE-2026-47890 SSE fragment rendering, CVE-2026-47884 `XsltView`). Notifyr is a JSON-only API and uses neither
-  feature; upgrading to Spring Boot 4 removes them. Re-run such a check regularly (e.g. GitHub Dependabot).
+- **Dependencies** were checked against [OSV.dev](https://osv.dev) on 2026-10-18 (175 resolved artifacts, all
+  scopes). Patched versions are pinned in `pom.xml`; the only open advisories are two Spring Framework 6.2 issues
+  fixed only in 7.0 (CVE-2026-47890 SSE fragment rendering, CVE-2026-47884 `XsltView`). RelayForge is a JSON-only
+  API and uses neither feature; upgrading to Spring Boot 4 removes them. Re-run such a check regularly (e.g. GitHub
+  Dependabot).
 
 Not covered: login rate limiting / account lockout, token revocation, TLS termination (expected at a reverse proxy),
-Redis authentication (Redis is bound to localhost in Compose).
+Redis authentication (Redis is bound to localhost in Compose), CORS (none configured, so browsers on other origins
+cannot call the API), and Swagger UI / OpenAPI docs are served without authentication.
 
 ---
 
@@ -529,6 +572,8 @@ Redis authentication (Redis is bound to localhost in Compose).
 - A campaign whose fan-out failed permanently (e.g. its template was deleted) ends `FAILED` and cannot be re-sent.
 - Published outbox rows are deleted after 24 h; dead letters are kept until removed manually.
 - No rate limiting or per-tenant quotas.
+- A Redis outage turns the overall health status DOWN (the `redis` component), although requests keep working
+  without the cache.
 
 Roadmap: dedicated per-channel queues, FCM push, provider idempotency keys, batched campaign fan-out, rate limiting,
 webhooks for delivery status.
@@ -537,8 +582,10 @@ webhooks for delivery status.
 
 ## Project structure
 
+The Java package is still `com.vatsasarthak.notifyr`: it was deliberately not renamed with the product.
+
 ```text
-src/main/java/com/yash/Notifyr/
+src/main/java/com/vatsasarthak/notifyr/
 ├── config/      security, RabbitMQ, Redis, OpenAPI, API-key + correlation-id filters, outbox health
 ├── controller/  REST endpoints (incl. AdminController)
 ├── dto/         requests/responses, PageResponse, ErrorResponse

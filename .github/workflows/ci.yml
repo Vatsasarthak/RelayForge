@@ -39,4 +39,4 @@ jobs:
           docker compose config --quiet
 
       - name: Build Docker image
-        run: docker build -t notifyr-app:ci .
+        run: docker build -t relayforge-app:ci .

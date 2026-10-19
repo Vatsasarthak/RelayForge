@@ -5,10 +5,12 @@
 
 spring:
   application:
-    name: Notifyr
+    name: RelayForge
 
   config:
-    import: optional:file:${NOTIFYR_ENV_FILE:.env}[.properties]
+    # RELAYFORGE_ENV_FILE points to another env file (tests use it to ignore a developer's .env);
+    # NOTIFYR_ENV_FILE is the pre-rename name, still honoured
+    import: optional:file:${RELAYFORGE_ENV_FILE:${NOTIFYR_ENV_FILE:.env}}[.properties]
 
   # Graceful shutdown (SIGTERM, docker stop): finish in-flight HTTP requests, let message listeners complete
   # the current delivery, and let scheduled jobs (outbox relay) finish their batch. docker-compose.yml gives
@@ -20,10 +22,14 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+      # Redis is only the idempotency cache: when it is down or hung, fail fast and fall back to PostgreSQL
+      # (the client default command timeout of 60 s blocked such requests for minutes)
+      timeout: 1s
+      connect-timeout: 2s
 
   datasource:
-    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:notifyr_db}
-    username: ${POSTGRES_USER:notifyr_user}
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:relayforge_db}
+    username: ${POSTGRES_USER:relayforge_user}
     password: ${POSTGRES_PASSWORD}
     driver-class-name: org.postgresql.Driver
     hikari:
@@ -46,7 +52,7 @@ spring:
   rabbitmq:
     host: ${RABBITMQ_HOST:localhost}
     port: ${RABBITMQ_PORT:5672}
-    username: ${RABBITMQ_DEFAULT_USER:notifyr_user}
+    username: ${RABBITMQ_DEFAULT_USER:relayforge_user}
     password: ${RABBITMQ_DEFAULT_PASS}
     connection-timeout: 5s
     # detect a hung or partitioned broker within seconds instead of the client defaults (60 s / 10 min)
@@ -100,6 +106,9 @@ spring:
 notification:
   # Required. Clients send it in the X-API-KEY header.
   api-key: ${API_KEY}
+  http:
+    # larger request bodies are rejected with 413 (the biggest valid request, a campaign, is far below this)
+    max-request-body-size: ${MAX_REQUEST_BODY_SIZE:1MB}
   jwt:
     # Required. HMAC-SHA signing key, at least 32 bytes.
     secret: ${JWT_SECRET}

@@ -1,1 +1,1 @@
-org.springframework.boot.env.EnvironmentPostProcessor=com.yash.Notifyr.config.TimeZoneNormalizer
+org.springframework.boot.env.EnvironmentPostProcessor=com.vatsasarthak.notifyr.config.TimeZoneNormalizer

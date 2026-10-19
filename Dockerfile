@@ -12,11 +12,11 @@ FROM eclipse-temurin:21-jre
 
 WORKDIR /app
 
-RUN groupadd --system notifyr && useradd --system --gid notifyr --no-create-home notifyr
+RUN groupadd --system relayforge && useradd --system --gid relayforge --no-create-home relayforge
 
 COPY --from=build /app/target/*.jar app.jar
 
-USER notifyr
+USER relayforge
 
 EXPOSE 8080
 

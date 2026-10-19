@@ -4,7 +4,7 @@
 
 ## Context
 
-Every state change in Notifyr is followed by a RabbitMQ message: a new notification must be queued, a campaign
+Every state change in RelayForge is followed by a RabbitMQ message: a new notification must be queued, a campaign
 send triggers a dispatch, a failed delivery schedules a retry or a dead letter. Originally the code saved to
 PostgreSQL and then called `RabbitTemplate.convertAndSend`. That is a dual write with three failure modes we
 observed or could reproduce:
@@ -31,6 +31,6 @@ deleted after 24 h.
   Consumers must be idempotent (see ADR 0003).
 - Up to one poll interval (default 100 ms) of extra latency between commit and publish.
 - PostgreSQL carries extra write load (one outbox row per message). `SKIP LOCKED` lets several app instances
-  relay concurrently; ordering across instances is not guaranteed (Notifyr does not need it).
+  relay concurrently; ordering across instances is not guaranteed (RelayForge does not need it).
 - Outbox backlog is visible as metrics (`outbox_events_pending`, `outbox_oldest_pending_age_seconds`) and as the
   `outbox` health component, which turns DOWN when the oldest pending event is older than 5 minutes.

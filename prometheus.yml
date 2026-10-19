@@ -3,7 +3,7 @@ global:
 
 scrape_configs:
   # Spring Boot actuator on the app's management port (not exposed on the API port)
-  - job_name: 'notifyr'
+  - job_name: 'relayforge'
     metrics_path: '/actuator/prometheus'
     static_configs:
       - targets: ['app:9091']
